@@ -12,17 +12,17 @@ on:
         description: "Kernel source URL"
         required: true
         type: string
-        default: "https://github.com/topnotchfreaks/kernel_msm-5.15"
+        default: "https://github.com/OdiNoKIY-KoT/sapphire-kernel"
       kernelBranch:
         description: "Kernel branch"
         required: false
         type: string
-        default: "codelinaro"
+        default: "zepharo"
       kernelDevice:
         description: "Device (used for defconfig)"
         required: true
         type: string
-        default: "gki"
+        default: "bengal_perf"
       localVersion:
         description: "Custom localversion name (e.g., -mybuild)"
         required: false
