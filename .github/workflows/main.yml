@@ -130,13 +130,10 @@ jobs:
          rm -rf ./KernelSU ./drivers/kernelsu ./susfs4ksu
 
          echo "📦 Installing ReSukiSU..."
-         curl -LSsf "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash -s main
+         curl -LSsf "https://raw.githubusercontent.com/Baka-SU/BakaSU/refs/heads/main/kernel/setup.sh" | bash -s main
          test -d KernelSU || { echo "KernelSU setup did not create KernelSU/"; exit 1; }
          echo "✔ ReSukiSU installed"
 
-         echo "📦 Cloning SUSFS4KSU..."
-         git clone --depth=1 --branch gki-android13-5.15 \
-         https://gitlab.com/simonpunk/susfs4ksu.git susfs4ksu
 
          echo "🔧 Applying SUSFS kernel patch..."
          patch --batch --forward -p1 < susfs4ksu/kernel_patches/50_add_susfs_in_gki-android13-5.15.patch
