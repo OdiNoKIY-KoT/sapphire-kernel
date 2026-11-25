@@ -4,7 +4,7 @@ env:
   OUT_DIR: "out"
   KERNEL_VERSION: "5.15"
   ANDROID_VERSION: "13"
-  
+
 on:
   workflow_dispatch:
     inputs:
@@ -57,70 +57,78 @@ jobs:
     steps:
       - name: "✨ Setup workspace"
         run: |
-          mkdir -p "$kernelDir"
-          echo "BUILD_TIME=$(date +'%Y-%m-%d')" >> "$GITHUB_ENV"
+          mkdir -p $kernelDir
+          echo "BUILD_TIME=$(date +'%Y-%m-%d')" >> $GITHUB_ENV
           sudo apt-get update -qq
           sudo apt-get install -y repo rsync aria2
 
       - name: 📐 Setup SWAP 15GB
         uses: pierotofy/set-swap-space@master
         with:
-          swap-size-gb: 15
-
+            swap-size-gb: 15
+            
       - name: 📐 Tune Swap
         run: |
-          echo "vm.swappiness=80" | sudo tee -a /etc/sysctl.conf
-          sudo sysctl -p
+            echo "vm.swappiness=80" | sudo tee -a /etc/sysctl.conf
+            sudo sysctl -p
 
       - name: "🌟 Clone kernel source"
         working-directory: ./${{ env.kernelDir }}
         run: |
-          git clone --recursive --branch "${{ inputs.kernelBranch }}" \
-            "${{ inputs.kernelSourceURL }}" "${{ env.kernelName }}" --depth=1
+          git clone --recursive --branch ${{ github.event.inputs.kernelBranch }} \
+            ${{ github.event.inputs.kernelSourceURL }} ${{ env.kernelName }} --depth=1
 
       - name: "📥 Initialize repo"
-        working-directory: ${{ env.WORK_DIR }}
+        working-directory: ${{ env.WORK_DIR}}
         run: |
-          repo init -u https://android.googlesource.com/kernel/manifest -b common-android13-5.15-lts --depth=1
-          repo sync --optimized-fetch --prune --no-clone-bundle --no-tags -j"$(nproc --all)"
+         repo init -u https://android.googlesource.com/kernel/manifest -b common-android13-5.15-lts --depth=1
+         repo sync --optimized-fetch --prune --no-clone-bundle --no-tags -j$(nproc --all)
+    
+         rm -rf .repo
+         rm -rf common
 
-          rm -rf .repo common
-          rm -rf prebuilts/clang/host/linux-x86/clang-3289846
-          rm -rf prebuilts/clang/host/linux-x86/clang-stable
+         # Clean up old Clang versions
+         rm -rf prebuilts/clang/host/linux-x86/clang-3289846
+         rm -rf prebuilts/clang/host/linux-x86/clang-stable
+         
+         sed -i \
+          -e 's/^BRANCH=.*/BRANCH=android13-5.15/' \
+          -e 's/^CLANG_VERSION=.*/CLANG_VERSION=r450784e/' \
+         ${{ env.kernelDir }}/${{ env.kernelName }}/build.config.constants
+    
+         sed -i '/^DEFCONFIG=gki_defconfig/d' ${{ env.kernelDir }}/${{ env.kernelName }}/build.config.gki
+         sed -i '$a\DEFCONFIG=${{ env.DEFCONFIG_NAME }}' ${{ env.kernelDir }}/${{ env.kernelName }}/build.config.gki
+         sed -i '/^POST_DEFCONFIG_CMDS="check_defconfig"/d' ${{ env.kernelDir }}/${{ env.kernelName }}/build.config.gki
 
-          sed -i \
-            -e 's/^BRANCH=.*/BRANCH=android13-5.15/' \
-            -e 's/^CLANG_VERSION=.*/CLANG_VERSION=r450784e/' \
-            "${{ env.kernelDir }}/${{ env.kernelName }}/build.config.constants"
-
-          sed -i '/^DEFCONFIG=gki_defconfig/d' "${{ env.kernelDir }}/${{ env.kernelName }}/build.config.gki"
-          sed -i '$a\DEFCONFIG=${{ env.DEFCONFIG_NAME }}' "${{ env.kernelDir }}/${{ env.kernelName }}/build.config.gki"
-          sed -i '/^POST_DEFCONFIG_CMDS="check_defconfig"/d' "${{ env.kernelDir }}/${{ env.kernelName }}/build.config.gki"
-
-          sed -i \
-            -e '/^KMI_SYMBOL_LIST_STRICT_MODE=/d' \
-            -e '/^TRIM_NONLISTED_KMI=/d' \
-            -e '/^KMI_ENFORCED=/d' \
-            -e '$a\KMI_SYMBOL_LIST_STRICT_MODE=0' \
-            -e '$a\TRIM_NONLISTED_KMI=0' \
-            -e '$a\KMI_ENFORCED=0' \
-            -e '/^MODULES_ORDER=/d' \
-            -e '/^MODULES_LIST=/d' \
-            "${{ env.kernelDir }}/${{ env.kernelName }}/build.config.gki.aarch64"
+         sed -i \
+          -e '/^KMI_SYMBOL_LIST_STRICT_MODE=/d' \
+          -e '/^TRIM_NONLISTED_KMI=/d' \
+          -e '/^KMI_ENFORCED=/d' \
+          -e '$a\KMI_SYMBOL_LIST_STRICT_MODE=0' \
+          -e '$a\TRIM_NONLISTED_KMI=0' \
+          -e '$a\KMI_ENFORCED=0' \
+          -e '/^MODULES_ORDER=/d' \
+          -e '/^MODULES_LIST=/d' \
+         ${{ env.kernelDir }}/${{ env.kernelName }}/build.config.gki.aarch64
 
       - name: "⚙️ Configure kernel"
         working-directory: ./${{ env.kernelDir }}/${{ env.kernelName }}
         run: |
+          # Define the config file path
           CONFIG_FILE="arch/arm64/configs/${{ env.DEFCONFIG_NAME }}"
-          if [ -n "${{ inputs.localVersion }}" ]; then
-            echo "CONFIG_LOCALVERSION=\"${{ inputs.localVersion }}\"" >> "$CONFIG_FILE"
+          
+          # Set localversion
+          if [ -n "${{ github.event.inputs.localVersion }}" ]; then
+            echo "CONFIG_LOCALVERSION=\"${{ github.event.inputs.localVersion }}\"" >> "$CONFIG_FILE"
           fi
-          cat >> "$CONFIG_FILE" <<'EOF'
+          
+          CONFIG_FILE="arch/arm64/configs/${{ env.DEFCONFIG_NAME }}"
+          cat >> "$CONFIG_FILE" << 'EOF'
           CONFIG_KALLSYMS=y
           CONFIG_TMPFS_XATTR=y
           CONFIG_TMPFS_POSIX_ACL=y
           EOF
-          
+
       - name: "🔧 Setup ReSukiSU"
         if: matrix.variant == 'ksu'
         working-directory: ./${{ env.kernelDir }}/${{ env.kernelName }}
@@ -216,16 +224,44 @@ jobs:
           CONFIG_KSU_SUSFS_SUS_MAP=y
           EOF
 
+          echo "↩️ Reverting namespace.c Fake Patch (if applicable)"
+          if [ "$NS_FAKE_PATCHED" = "1" ] && ! grep -q 'trace/hooks/blk.h' fs/namespace.c; then
+            if grep -q '^#include "internal.h"$' fs/namespace.c; then
+              sed -i '/^#include "internal.h"$/a #include <trace/hooks/blk.h>' fs/namespace.c
+              echo "✔ Restored blk.h include"
+            else
+              echo "⚠️ Anchor #include \"internal.h\" not found — could not restore blk.h include, check fs/namespace.c manually"
+            fi
+          else
+            echo "ℹ️ Skipping blk.h restore (not fake-patched or already present)"
+          fi
+
+          echo "↩️ Reverting task_mmu.c Fake Patch (if applicable)"
+          if [ "$MM_FAKE_PATCHED" = "1" ] && ! grep -q 'trace/hooks/mm.h' fs/proc/task_mmu.c; then
+            if grep -q '^#include <linux/pkeys.h>$' fs/proc/task_mmu.c; then
+              sed -i '/^#include <linux\/pkeys.h>$/a #include <trace/hooks/mm.h>' fs/proc/task_mmu.c
+              echo "✔ Restored mm.h include"
+            else
+              echo "⚠️ Anchor #include <linux/pkeys.h> not found — could not restore mm.h include, check fs/proc/task_mmu.c manually"
+            fi
+          else
+            echo "ℹ️ Skipping mm.h restore (not fake-patched or already present)"
+          fi
+          
+          echo "✅ KSU configs added"
+
+          echo "🎉 ReSukiSU installed and SUSFS for GKI android13-5.15 fully integrated!"
 
       - name: "🔨 Build kernel"
         working-directory: ${{ env.WORK_DIR }}
         run: |
           LTO=thin BUILD_CONFIG=${{ env.kernelDir }}/${{ env.kernelName }}/build.config.gki.aarch64 \
-            build/build.sh -j"$(nproc --all)"
+          build/build.sh -j$(nproc --all)
 
       - name: "📦 Prepare artifact"
         working-directory: ${{ env.WORK_DIR }}
-        run: cp out/dist/Image "Image.${{ matrix.variant }}"
+        run: |
+          cp out/dist/Image Image.${{ matrix.variant }}
 
       - name: "📤 Upload kernel"
         uses: actions/upload-artifact@v4
@@ -248,13 +284,17 @@ jobs:
         run: |
           BUILD_TIME=$(date +'%Y-%m-%d')
           git clone --depth=1 https://github.com/topnotchfreaks/AnyKernel3 -b master AnyKernel3
-          find kernels -name 'Image.*' -exec cp {} AnyKernel3/ \;
-          ZIP_NAME="Anykernel3_ReSukiSU_${{ inputs.kernelBranch }}_${BUILD_TIME}.zip"
+          
+          # Copy kernels
+          find kernels -name "Image.*" -exec cp {} AnyKernel3/ \;
+          
+          # Create ZIP
+          ZIP_NAME="Anykernel3_ReSukiSU_${{ github.event.inputs.kernelBranch }}_${BUILD_TIME}.zip"
           cd AnyKernel3
-          zip -r9 "../$ZIP_NAME" . -x '.git/*'
+          zip -r9 "../$ZIP_NAME" * -x .git/*
           cd ..
-          echo "ZIP_PATH=$(pwd)/$ZIP_NAME" >> "$GITHUB_ENV"
-          echo "ZIP_NAME=$ZIP_NAME" >> "$GITHUB_ENV"
+          echo "ZIP_PATH=$(pwd)/$ZIP_NAME" >> $GITHUB_ENV
+          echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
 
       - name: "📤 Upload final package"
         uses: actions/upload-artifact@v4
@@ -268,12 +308,12 @@ jobs:
         run: |
           if [[ -f "${{ env.ZIP_PATH }}" ]]; then
             curl -s -F document=@"${{ env.ZIP_PATH }}" \
-              -F caption="✅ Kernel Build Complete (WildKSU) - $(date '+%Y-%m-%d %H:%M:%S')" \
-              -F chat_id="${{ secrets.TELEGRAM_USER_ID }}" \
-              "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendDocument"
+                 -F caption="✅ Kernel Build Complete (WildKSU) - $(date '+%Y-%m-%d %H:%M:%S')" \
+                 -F chat_id=${{ secrets.TELEGRAM_USER_ID }} \
+                 "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendDocument"
           else
             curl -s -X POST \
-              -d chat_id="${{ secrets.TELEGRAM_USER_ID }}" \
-              -d text="❌ Kernel build failed" \
-              "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage"
+                 -d chat_id=${{ secrets.TELEGRAM_USER_ID }} \
+                 -d text="❌ Kernel build failed" \
+                 "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage"
           fi
