@@ -124,7 +124,7 @@ jobs:
           
       - name: "🔧 Setup ReSukiSU + SUSFS"
         if: matrix.variant == 'ksu'
-        working-directory: ./${{ env.kernelDir }}/${{ env.kernelName }
+        working-directory: ./${{ env.kernelDir }}/${{ env.kernelName }}
         run: |
          set -euo pipefail
          rm -rf ./KernelSU ./drivers/kernelsu ./susfs4ksu
