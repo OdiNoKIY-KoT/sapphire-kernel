@@ -129,14 +129,14 @@ jobs:
           CONFIG_TMPFS_POSIX_ACL=y
           EOF
 
-      - name: "🔧 Setup ReSukiSU"
+      - name: "🔧 Setup SukiSU Nova"
         if: matrix.variant == 'ksu'
         working-directory: ./${{ env.kernelDir }}/${{ env.kernelName }}
         run: |
           rm -rf ./KernelSU ./drivers/kernelsu
 
           echo "📦 Installing KSU..."
-          curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash -s main
+          curl -LSs "https://raw.githubusercontent.com/SukiSU-Nova/SukiSU-Nova/refs/heads/main/kernel/setup.sh" | bash -s main
           
           echo "✔ KSU installed successfully"
           
