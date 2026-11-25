@@ -22,7 +22,7 @@ on:
         description: "Device (used for defconfig)"
         required: true
         type: string
-        default: "bengal_perf"
+        default: "generic_bengal"
       localVersion:
         description: "Custom localversion name (e.g., -mybuild)"
         required: false
