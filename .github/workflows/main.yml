@@ -4,6 +4,7 @@ env:
   OUT_DIR: "out"
   KERNEL_VERSION: "5.15"
   ANDROID_VERSION: "13"
+  SUSFS_COMMIT: "c1d1da42b74771944207ec45aaceff9c57e84985"
 
 on:
   workflow_dispatch:
@@ -121,60 +122,65 @@ jobs:
           CONFIG_TMPFS_POSIX_ACL=y
           EOF
 
-      - name: "🔧 Setup ReSukiSU"
+      - name: "🔧 Setup ReSukiSU + SUSFS 2.4.0"
         if: matrix.variant == 'ksu'
         working-directory: ./${{ env.kernelDir }}/${{ env.kernelName }}
         run: |
-          rm -rf ./KernelSU ./drivers/kernelsu
-          echo "📦 Installing KSU..."
-          # Match the upstream builder: this SUSFS integration expects ReSukiSU.
+          set -euo pipefail
+          rm -rf ./KernelSU ./drivers/kernelsu ./susfs4ksu
+
+          echo "📦 Installing ReSukiSU..."
           curl -LSsf "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash -s main
           test -d KernelSU || { echo "KernelSU setup did not create KernelSU/"; exit 1; }
-          echo "✔ KSU installed successfully"
+          echo "✔ ReSukiSU installed"
 
-          echo "📦 Cloning SUSFS4KSU for kernel patches..."
-          git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git -b gki-android13-5.15
+          echo "📦 Fetching SUSFS v2.4.0: $SUSFS_COMMIT"
+          git clone --depth=1 --branch gki-android13-5.15 \
+            https://gitlab.com/simonpunk/susfs4ksu.git susfs4ksu
+          git -C susfs4ksu fetch --depth=1 origin "$SUSFS_COMMIT"
+          git -C susfs4ksu checkout --detach FETCH_HEAD
+          ACTUAL_SUSFS_COMMIT=$(git -C susfs4ksu rev-parse HEAD)
+          test "$ACTUAL_SUSFS_COMMIT" = "$SUSFS_COMMIT" || {
+            echo "❌ SUSFS pin mismatch: expected $SUSFS_COMMIT, got $ACTUAL_SUSFS_COMMIT"
+            exit 1
+          }
+          grep -q 'SUSFS_VERSION.*2\.4\.0' susfs4ksu/kernel_patches/include/linux/susfs.h || {
+            echo "❌ Pinned SUSFS headers do not identify version 2.4.0"
+            exit 1
+          }
 
-          echo "☣️ Applying namespace.c Fake Patch (if applicable)"
-          if grep -q '^#include <trace/hooks/blk.h>$' fs/namespace.c; then
-            sed -i '/^#include <trace\/hooks\/blk.h>$/d' fs/namespace.c
-            NS_FAKE_PATCHED=1
-          else
-            echo "ℹ️ blk.h include not present in fs/namespace.c — skipping fake patch"
-            NS_FAKE_PATCHED=0
-          fi
-
-          echo "☣️ Applying task_mmu.c Fake Patch (if applicable)"
-          if grep -q '^#include <trace/hooks/mm.h>$' fs/proc/task_mmu.c; then
-            sed -i '/^#include <trace\/hooks\/mm.h>$/d' fs/proc/task_mmu.c
-            MM_FAKE_PATCHED=1
-          else
-            echo "ℹ️ mm.h include not present in fs/proc/task_mmu.c — skipping fake patch"
-            MM_FAKE_PATCHED=0
-          fi
-
+          # Keep the vendor trace-hook includes intact. The previous workflow
+          # deleted them before patching, which caused the two top-of-file
+          # SUSFS hunks in namespace.c and task_mmu.c to reject.
           SUSFS_KERNEL_PATCH="susfs4ksu/kernel_patches/50_add_susfs_in_gki-android13-5.15.patch"
-          echo "🔧 Applying SUSFS kernel patch..."
-          if patch --forward --batch -p1 < "$SUSFS_KERNEL_PATCH"; then
-            echo "✅ SUSFS patch successfully applied"
-          else
-            echo "❌ SUSFS patch did not apply cleanly; refusing to build a partially patched kernel."
-            exit 1
-          fi
-
           KSU_PATCH="susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch"
-          echo "🔧 Applying SUSFS -> KernelSU patch..."
-          if patch --forward --batch -p1 < "$KSU_PATCH"; then
-            echo "✅ SUSFS -> KernelSU patch successfully applied"
-          else
-            echo "❌ SUSFS -> KernelSU patch did not apply cleanly; refusing to build."
-            exit 1
-          fi
+          test -s "$SUSFS_KERNEL_PATCH"
+          test -s "$KSU_PATCH"
+
+          echo "🔧 Checking SUSFS kernel patch against this source tree..."
+          patch --batch --forward --fuzz=0 --dry-run -p1 < "$SUSFS_KERNEL_PATCH"
+          patch --batch --forward --fuzz=0 -p1 < "$SUSFS_KERNEL_PATCH"
+          echo "✅ SUSFS kernel patch applied cleanly"
+
+          echo "🔧 Checking SUSFS -> ReSukiSU patch..."
+          patch --batch --forward --fuzz=0 --dry-run -d KernelSU < "$KSU_PATCH"
+          patch --batch --forward --fuzz=0 -d KernelSU < "$KSU_PATCH"
+          echo "✅ SUSFS -> ReSukiSU patch applied cleanly"
+
+          # Upstream keeps SUSFS implementation files beside, not inside, the
+          # integration diff. Copy the full upstream filesystem/header payload.
+          cp -a susfs4ksu/kernel_patches/fs/. fs/
+          cp -a susfs4ksu/kernel_patches/include/linux/. include/linux/
+          rm -rf susfs4ksu
 
           for f in fs/susfs.c include/linux/susfs.h include/linux/susfs_def.h; do
-            test -f "$f" || { echo "❌ Required SUSFS file missing: $f"; exit 1; }
+            test -s "$f" || { echo "❌ Required SUSFS file missing: $f"; exit 1; }
           done
-          rm -rf susfs4ksu
+          grep -q 'susfs.o' fs/Makefile || { echo "❌ SUSFS object is not wired in fs/Makefile"; exit 1; }
+          grep -q 'SUSFS_VERSION.*2\.4\.0' include/linux/susfs.h || {
+            echo "❌ Installed kernel header is not SUSFS 2.4.0"
+            exit 1
+          }
 
           CONFIG_FILE="arch/arm64/configs/${{ env.DEFCONFIG_NAME }}"
           cat >> "$CONFIG_FILE" <<'EOF'
@@ -189,17 +195,7 @@ jobs:
           CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
           CONFIG_KSU_SUSFS_SUS_MAP=y
           EOF
-
-          echo "↩️ Restoring trace hook includes"
-          if [ "$NS_FAKE_PATCHED" = "1" ] && ! grep -q 'trace/hooks/blk.h' fs/namespace.c; then
-            grep -q '^#include "internal.h"$' fs/namespace.c || { echo 'Missing namespace.c include anchor'; exit 1; }
-            sed -i '/^#include "internal.h"$/a #include <trace/hooks/blk.h>' fs/namespace.c
-          fi
-          if [ "$MM_FAKE_PATCHED" = "1" ] && ! grep -q 'trace/hooks/mm.h' fs/proc/task_mmu.c; then
-            grep -q '^#include <linux/pkeys.h>$' fs/proc/task_mmu.c || { echo 'Missing task_mmu.c include anchor'; exit 1; }
-            sed -i '/^#include <linux\/pkeys.h>$/a #include <trace/hooks/mm.h>' fs/proc/task_mmu.c
-          fi
-          echo "✅ ReSukiSU and SUSFS setup completed"
+          echo "✅ Full SUSFS 2.4.0 feature config added"
 
       - name: "🔨 Build kernel"
         working-directory: ${{ env.WORK_DIR }}
